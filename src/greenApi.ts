@@ -9,7 +9,6 @@ import type {
 } from './types'
 import { isRecord } from './types'
 
-// Хост без дефиса: с этой сети api.green-api.com не открывается.
 export const DEFAULT_API_URL = 'https://api.greenapi.com'
 export const MESSAGE_LIMIT = 20000
 
