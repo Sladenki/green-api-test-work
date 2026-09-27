@@ -1,6 +1,9 @@
+import type { Chat, ChatMessage, MessageData, NotificationBody, SenderData, WhatsappAccount } from './types'
+
 const TEXT_TYPES = new Set(['textMessage', 'extendedTextMessage', 'quotedMessage'])
 
-export function normalizePhone(value) {
+// Российский номер 8… приводим к международному 7….
+export function normalizePhone(value: string) {
   let digits = String(value || '').replace(/\D/g, '')
   if (digits.length === 11 && digits.startsWith('8')) {
     digits = `7${digits.slice(1)}`
@@ -9,7 +12,7 @@ export function normalizePhone(value) {
   return digits
 }
 
-export function formatPhone(value) {
+export function formatPhone(value: string) {
   const digits = String(value || '').replace(/\D/g, '')
   if (digits.length === 11 && digits.startsWith('7')) {
     return `+7 ${digits.slice(1, 4)} ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9)}`
@@ -17,8 +20,9 @@ export function formatPhone(value) {
   return digits ? `+${digits}` : ''
 }
 
-export function extractText(messageData) {
-  if (!messageData || !TEXT_TYPES.has(messageData.typeMessage)) return null
+// Берём только текст. Файлы и статусы в чат не попадают.
+export function extractText(messageData?: MessageData) {
+  if (!messageData || !messageData.typeMessage || !TEXT_TYPES.has(messageData.typeMessage)) return null
 
   const text =
     messageData.textMessageData?.textMessage ??
@@ -29,12 +33,12 @@ export function extractText(messageData) {
   return trimmed ? text : null
 }
 
-export function chatFromAccount(rawPhone, account) {
-  const username = typeof account?.username === 'string' ? account.username.trim() : ''
-  const phone = phoneDigits(account?.phoneNumber) || rawPhone
+export function chatFromAccount(rawPhone: string, account: WhatsappAccount): Chat {
+  const username = typeof account.username === 'string' ? account.username.trim() : ''
+  const phone = phoneDigits(account.phoneNumber) || rawPhone
 
   return {
-    id: account?.chatId ? String(account.chatId) : `${rawPhone}@c.us`,
+    id: account.chatId ? String(account.chatId) : `${rawPhone}@c.us`,
     phone,
     title: username || formatPhone(rawPhone),
     unread: 0,
@@ -42,28 +46,28 @@ export function chatFromAccount(rawPhone, account) {
   }
 }
 
-function phoneDigits(value) {
+function phoneDigits(value: unknown) {
   const digits = String(value || '').replace(/\D/g, '')
   return digits && digits !== '0' ? digits : ''
 }
 
-function phoneFromPersonalChatId(chatId) {
+function phoneFromPersonalChatId(chatId: unknown) {
   const value = String(chatId || '')
   if (!value.endsWith('@c.us')) return ''
   return phoneDigits(value)
 }
 
-function senderPhone(sender) {
+function senderPhone(sender?: SenderData) {
   return phoneDigits(sender?.senderPhoneNumber) || phoneFromPersonalChatId(sender?.chatId)
 }
 
-function samePhone(chat, sender) {
+function samePhone(chat: Chat, sender?: SenderData) {
   const incoming = senderPhone(sender)
   const known = phoneDigits(chat.phone) || phoneFromPersonalChatId(chat.id)
   return Boolean(incoming && known) && incoming === known
 }
 
-function betterTitle(chat, sender) {
+function betterTitle(chat: Chat, sender?: SenderData) {
   const incoming = sender?.chatName || sender?.senderContactName || sender?.senderName || ''
   if (!incoming) return chat.title
   const generic = new Set([chat.id, chat.phone, formatPhone(chat.phone), `+${chat.phone}`])
@@ -71,7 +75,8 @@ function betterTitle(chat, sender) {
   return chat.title
 }
 
-export function applyNotification(chats, body, activeChatId = '') {
+// Ответ может прийти с chatId вида @lid, поэтому чат ищем ещё и по номеру телефона.
+export function applyNotification(chats: Chat[], body?: NotificationBody, activeChatId = '') {
   if (!body) return chats
 
   const type = body.typeWebhook
@@ -81,11 +86,11 @@ export function applyNotification(chats, body, activeChatId = '') {
   }
 
   const text = extractText(body.messageData)
-  const sender = body.senderData || {}
-  const chatId = sender.chatId != null ? String(sender.chatId) : ''
+  const sender = body.senderData
+  const chatId = sender?.chatId != null ? String(sender.chatId) : ''
   if (!text || !chatId) return chats
 
-  const message = {
+  const message: ChatMessage = {
     id: String(body.idMessage || `${body.timestamp || Date.now()}-${chatId}`),
     text,
     outgoing,
@@ -100,7 +105,12 @@ export function applyNotification(chats, body, activeChatId = '') {
       {
         id: chatId,
         phone: senderPhone(sender),
-        title: sender.chatName || sender.senderContactName || sender.senderName || formatPhone(senderPhone(sender)) || chatId,
+        title:
+          sender?.chatName ||
+          sender?.senderContactName ||
+          sender?.senderName ||
+          formatPhone(senderPhone(sender)) ||
+          chatId,
         unread: message.outgoing || chatId === activeChatId ? 0 : 1,
         messages: [message],
       },
@@ -112,7 +122,7 @@ export function applyNotification(chats, body, activeChatId = '') {
   if (chat.messages.some((item) => item.id === message.id)) return chats
 
   const isActive = chat.id === activeChatId
-  const nextChat = {
+  const nextChat: Chat = {
     ...chat,
     phone: chat.phone || senderPhone(sender),
     title: betterTitle(chat, sender),
@@ -123,7 +133,7 @@ export function applyNotification(chats, body, activeChatId = '') {
   return [nextChat, ...chats.filter((_, itemIndex) => itemIndex !== index)]
 }
 
-export function appendOutgoing(chats, chatId, message) {
+export function appendOutgoing(chats: Chat[], chatId: string, message: ChatMessage) {
   return chats.map((chat) =>
     chat.id === chatId
       ? { ...chat, messages: [...chat.messages, message].slice(-200) }
@@ -131,7 +141,7 @@ export function appendOutgoing(chats, chatId, message) {
   )
 }
 
-export function confirmOutgoing(chats, chatId, tempId, idMessage) {
+export function confirmOutgoing(chats: Chat[], chatId: string, tempId: string, idMessage: string) {
   return chats.map((chat) => {
     if (chat.id !== chatId) return chat
     const alreadySaved = chat.messages.some((item) => item.id === idMessage)
@@ -140,25 +150,25 @@ export function confirmOutgoing(chats, chatId, tempId, idMessage) {
       messages: alreadySaved
         ? chat.messages.filter((item) => item.id !== tempId)
         : chat.messages.map((item) =>
-            item.id === tempId ? { ...item, id: idMessage, status: 'sent' } : item,
+            item.id === tempId ? { ...item, id: idMessage, status: 'sent' as const } : item,
           ),
     }
   })
 }
 
-export function failOutgoing(chats, chatId, tempId) {
+export function failOutgoing(chats: Chat[], chatId: string, tempId: string) {
   return chats.map((chat) =>
     chat.id === chatId
       ? {
           ...chat,
           messages: chat.messages.map((item) =>
-            item.id === tempId ? { ...item, status: 'error' } : item,
+            item.id === tempId ? { ...item, status: 'error' as const } : item,
           ),
         }
       : chat,
   )
 }
 
-export function markChatRead(chats, chatId) {
+export function markChatRead(chats: Chat[], chatId: string) {
   return chats.map((chat) => (chat.id === chatId ? { ...chat, unread: 0 } : chat))
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import {
   appendOutgoing,
   applyNotification,
@@ -20,58 +20,87 @@ import {
   receiveNotification,
   sendMessage,
 } from './greenApi'
+import type { Auth, Chat, ChatMessage, MessageStatus, Session } from './types'
+import { isRecord } from './types'
 import './App.css'
 
+// Данные инстанса и переписка остаются только в этом браузере.
 const AUTH_KEY = 'wa-chat-auth'
 
 const AVATAR_COLORS = ['#2f80ed', '#1f9d8a', '#6d5efc', '#e07a3d', '#d4527a', '#3d8b8b']
 
-function chatsKey(idInstance) {
+function chatsKey(idInstance: string) {
   return `wa-chat-chats:${idInstance}`
 }
 
-function readJson(key, fallback) {
+function readJson(key: string): unknown {
   try {
     const raw = localStorage.getItem(key)
-    return raw ? JSON.parse(raw) : fallback
+    return raw ? JSON.parse(raw) : null
   } catch {
-    return fallback
+    return null
   }
 }
 
-function readAuth() {
-  const data = readJson(AUTH_KEY, null)
-  if (!data?.idInstance || !data?.apiTokenInstance) return null
+function isMessage(value: unknown): value is ChatMessage {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.id === 'string' &&
+    typeof value.text === 'string' &&
+    typeof value.outgoing === 'boolean' &&
+    typeof value.timestamp === 'number' &&
+    (value.status === 'sending' || value.status === 'sent' || value.status === 'error')
+  )
+}
+
+function isChat(value: unknown): value is Chat {
+  if (!isRecord(value) || !Array.isArray(value.messages)) return false
+  return (
+    typeof value.id === 'string' &&
+    typeof value.phone === 'string' &&
+    typeof value.title === 'string' &&
+    typeof value.unread === 'number' &&
+    value.messages.every(isMessage)
+  )
+}
+
+function readAuth(): Auth | null {
+  const data = readJson(AUTH_KEY)
+  if (!isRecord(data)) return null
+  if (typeof data.idInstance !== 'string' || typeof data.apiTokenInstance !== 'string') return null
+  const idInstance = data.idInstance.trim()
+  const apiTokenInstance = data.apiTokenInstance.trim()
+  if (!idInstance || !apiTokenInstance) return null
+  const apiUrl = typeof data.apiUrl === 'string' ? data.apiUrl.trim() : ''
   return {
-    idInstance: String(data.idInstance).trim(),
-    apiTokenInstance: String(data.apiTokenInstance).trim(),
-    apiUrl: String(data.apiUrl || DEFAULT_API_URL).trim(),
+    idInstance,
+    apiTokenInstance,
+    apiUrl: apiUrl || DEFAULT_API_URL,
   }
 }
 
-function readChats(idInstance) {
-  const chats = readJson(chatsKey(idInstance), [])
-  return Array.isArray(chats) ? chats : []
+function readChats(idInstance: string) {
+  const chats = readJson(chatsKey(idInstance))
+  return Array.isArray(chats) ? chats.filter(isChat) : []
 }
 
-function saveAuth(auth) {
+function saveAuth(auth: Auth) {
   localStorage.setItem(AUTH_KEY, JSON.stringify(auth))
 }
 
-function colorFrom(value) {
-  const text = String(value || '')
-  const index = [...text].reduce((sum, char) => sum + char.charCodeAt(0), 0)
+function colorFrom(value: string) {
+  const index = [...value].reduce((sum, char) => sum + char.charCodeAt(0), 0)
   return AVATAR_COLORS[index % AVATAR_COLORS.length]
 }
 
-function formatTime(timestamp) {
+function formatTime(timestamp: number) {
   return new Date(timestamp).toLocaleTimeString('ru-RU', {
     hour: '2-digit',
     minute: '2-digit',
   })
 }
 
-function formatDay(timestamp) {
+function formatDay(timestamp: number) {
   const date = new Date(timestamp)
   const today = new Date()
   const yesterday = new Date()
@@ -82,14 +111,26 @@ function formatDay(timestamp) {
   return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
 }
 
-function sameDay(left, right) {
-  const a = new Date(left)
-  const b = new Date(right)
-  return a.toDateString() === b.toDateString()
+function sameDay(left: number, right: number) {
+  return new Date(left).toDateString() === new Date(right).toDateString()
 }
 
-function sleep(ms, signal) {
-  return new Promise((resolve, reject) => {
+function abortError() {
+  const error = new Error('Aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+function errorText(error: unknown) {
+  return error instanceof Error ? error.message : 'Неизвестная ошибка'
+}
+
+function sleep(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
       reject(abortError())
       return
@@ -106,13 +147,7 @@ function sleep(ms, signal) {
   })
 }
 
-function abortError() {
-  const error = new Error('Aborted')
-  error.name = 'AbortError'
-  return error
-}
-
-function Avatar({ title, size = 44 }) {
+function Avatar({ title, size = 44 }: { title: string; size?: number }) {
   return (
     <span
       className="avatar"
@@ -124,7 +159,8 @@ function Avatar({ title, size = 44 }) {
   )
 }
 
-function AuthScreen({ onSuccess }) {
+// Форма входа: idInstance, ключ и адрес API из личного кабинета.
+function AuthScreen({ onSuccess }: { onSuccess: (session: Session) => void }) {
   const [idInstance, setIdInstance] = useState('')
   const [apiTokenInstance, setApiTokenInstance] = useState('')
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL)
@@ -132,9 +168,9 @@ function AuthScreen({ onSuccess }) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  async function handleSubmit(event) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const auth = {
+    const auth: Auth = {
       idInstance: idInstance.trim(),
       apiTokenInstance: apiTokenInstance.trim(),
       apiUrl: apiUrl.trim() || DEFAULT_API_URL,
@@ -153,9 +189,9 @@ function AuthScreen({ onSuccess }) {
     setError('')
     try {
       const state = await getStateInstance(auth)
-      onSuccess({ ...auth, stateInstance: state?.stateInstance || '' })
+      onSuccess({ ...auth, stateInstance: state.stateInstance || '' })
     } catch (requestError) {
-      setError(requestError.message)
+      setError(errorText(requestError))
     } finally {
       setLoading(false)
     }
@@ -233,8 +269,8 @@ function AuthScreen({ onSuccess }) {
   )
 }
 
-function ChatApp({ auth, onLogout }) {
-  const [chats, setChats] = useState(() => readChats(auth.idInstance))
+function ChatApp({ auth, onLogout }: { auth: Session; onLogout: () => void }) {
+  const [chats, setChats] = useState<Chat[]>(() => readChats(auth.idInstance))
   const [activeChatId, setActiveChatId] = useState('')
   const [phone, setPhone] = useState('')
   const [draft, setDraft] = useState('')
@@ -246,8 +282,8 @@ function ChatApp({ auth, onLogout }) {
   const [stateInstance, setStateInstance] = useState(auth.stateInstance || '')
   const [mobileChat, setMobileChat] = useState(false)
   const activeIdRef = useRef(activeChatId)
-  const threadRef = useRef(null)
-  const draftRef = useRef(null)
+  const threadRef = useRef<HTMLDivElement>(null)
+  const draftRef = useRef<HTMLTextAreaElement>(null)
   const activeChat = chats.find((chat) => chat.id === activeChatId) || null
 
   useEffect(() => {
@@ -271,17 +307,18 @@ function ChatApp({ auth, onLogout }) {
     node.style.height = `${Math.min(node.scrollHeight, 140)}px`
   }, [draft, activeChatId])
 
+  // Длинный опрос: забираем одно уведомление и сразу удаляем его из очереди.
   useEffect(() => {
     const controller = new AbortController()
     let stopped = false
 
     getStateInstance(auth, controller.signal)
       .then((state) => {
-        if (!stopped) setStateInstance(state?.stateInstance || '')
+        if (!stopped) setStateInstance(state.stateInstance || '')
       })
-      .catch((error) => {
-        if (error.name === 'AbortError' || stopped) return
-        setPollError(explainReceiveError(error.message))
+      .catch((error: unknown) => {
+        if (isAbortError(error) || stopped) return
+        setPollError(explainReceiveError(errorText(error)))
       })
 
     async function poll() {
@@ -293,8 +330,8 @@ function ChatApp({ auth, onLogout }) {
           )
         }
       } catch (error) {
-        if (error.name === 'AbortError' || stopped) return
-        if (!stopped) setPollError(explainReceiveError(error.message))
+        if (isAbortError(error) || stopped) return
+        if (!stopped) setPollError(explainReceiveError(errorText(error)))
       }
 
       while (!stopped) {
@@ -316,8 +353,8 @@ function ChatApp({ auth, onLogout }) {
           await deleteNotification(auth, notification.receiptId, controller.signal)
           if (!stopped) setPollError('')
         } catch (error) {
-          if (error.name === 'AbortError' || stopped) return
-          if (!stopped) setPollError(explainReceiveError(error.message))
+          if (isAbortError(error) || stopped) return
+          if (!stopped) setPollError(explainReceiveError(errorText(error)))
           try {
             await sleep(3000, controller.signal)
           } catch {
@@ -334,7 +371,7 @@ function ChatApp({ auth, onLogout }) {
     }
   }, [auth])
 
-  function openChat(chatId) {
+  function openChat(chatId: string) {
     activeIdRef.current = chatId
     setActiveChatId(chatId)
     setChats((current) => markChatRead(current, chatId))
@@ -342,7 +379,7 @@ function ChatApp({ auth, onLogout }) {
     setDraft('')
   }
 
-  async function handleCreate(event) {
+  async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const digits = normalizePhone(phone)
     if (!digits) {
@@ -362,7 +399,7 @@ function ChatApp({ auth, onLogout }) {
     setFormError('')
     try {
       const account = await checkWhatsapp(auth, digits)
-      if (!account?.existsWhatsapp) {
+      if (!account.existsWhatsapp) {
         setFormError('На этом номере нет WhatsApp')
         return
       }
@@ -373,13 +410,13 @@ function ChatApp({ auth, onLogout }) {
       openChat(chat.id)
       setPhone('')
     } catch (error) {
-      setFormError(error.message)
+      setFormError(errorText(error))
     } finally {
       setCreating(false)
     }
   }
 
-  async function handleSend(event) {
+  async function handleSend(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!activeChat || sending) return
 
@@ -406,16 +443,16 @@ function ChatApp({ auth, onLogout }) {
 
     try {
       const result = await sendMessage(auth, chatId, text)
-      setChats((current) => confirmOutgoing(current, chatId, tempId, String(result.idMessage)))
+      setChats((current) => confirmOutgoing(current, chatId, tempId, result.idMessage))
     } catch (error) {
       setChats((current) => failOutgoing(current, chatId, tempId))
-      setPollError(error.message)
+      setPollError(errorText(error))
     } finally {
       setSending(false)
     }
   }
 
-  function handleDraftKeyDown(event) {
+  function handleDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       event.currentTarget.form?.requestSubmit()
@@ -551,7 +588,7 @@ function ChatApp({ auth, onLogout }) {
                     <div key={message.id}>
                       {showDay ? <div className="day">{formatDay(message.timestamp)}</div> : null}
                       <div className={message.outgoing ? 'message-row out' : 'message-row in'}>
-                        <div className={`bubble ${message.status || 'sent'}`}>
+                        <div className={`bubble ${message.status}`}>
                           <p>{message.text}</p>
                           <span className="meta">
                             <time>{formatTime(message.timestamp)}</time>
@@ -604,28 +641,27 @@ function ChatApp({ auth, onLogout }) {
   )
 }
 
-function explainReceiveError(message) {
-  const text = String(message || '')
-  if (/starting or not authorized/i.test(text)) {
+function explainReceiveError(message: string) {
+  if (/starting or not authorized/i.test(message)) {
     return 'Инстанс ещё запускается. Подождите, пока внизу появится «WhatsApp подключен», и попросите друга написать ещё раз.'
   }
-  if (/webhook url is set/i.test(text)) {
+  if (/webhook url is set/i.test(message)) {
     return 'В кабинете указан webhook, поэтому ответ не попадает в чат. Очистите webhook и включите входящие уведомления.'
   }
-  return text || 'Не удалось получить сообщения'
+  return message || 'Не удалось получить сообщения'
 }
 
-function StatusMark({ status }) {
+function StatusMark({ status }: { status: MessageStatus }) {
   if (status === 'sending') return <span>…</span>
   if (status === 'error') return <span>не отправлено</span>
   return <span>✓</span>
 }
 
 export default function App() {
-  const [auth, setAuth] = useState(readAuth)
+  const [auth, setAuth] = useState<Session | null>(readAuth)
 
-  function handleLogin(nextAuth) {
-    const session = {
+  function handleLogin(nextAuth: Session) {
+    const session: Auth = {
       idInstance: nextAuth.idInstance,
       apiTokenInstance: nextAuth.apiTokenInstance,
       apiUrl: nextAuth.apiUrl,
