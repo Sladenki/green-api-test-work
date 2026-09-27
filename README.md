@@ -2,26 +2,17 @@
 
 Веб-чат на React и TypeScript для отправки и получения текстовых сообщений в WhatsApp. Интерфейс сделан по образцу [web.max.ru](https://web.max.ru/): список диалогов слева, переписка справа, синие исходящие сообщения.
 
-Это вариант тестового задания для мессенджера WhatsApp, а не MAX.
-
 ## Локальный запуск
 
 Нужны Node.js 20+ и npm.
 
 ```bash
-cd my-react-app
+git clone 
 npm install
 npm run dev
 ```
 
 Сайт откроется на [http://localhost:5173](http://localhost:5173).
-
-Сборка для проверки:
-
-```bash
-npm run build
-npm run preview
-```
 
 ## Подготовка GREEN-API
 
@@ -37,7 +28,7 @@ npm run preview
 4. Напишите текст и отправьте его. Enter отправляет сообщение, Shift+Enter переносит строку.
 5. Ответ из WhatsApp появится в этом чате. Приложение забирает уведомления методом `receiveNotification` и удаляет их методом `deleteNotification`.
 
-Учётные данные и переписка хранятся только в `localStorage` браузера. Не выкладывайте скриншоты, на которых виден `apiTokenInstance`.
+Учётные данные и переписка хранятся только в `localStorage` браузера. 
 
 ## Что реализовано
 
